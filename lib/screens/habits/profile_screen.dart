@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../auth/auth_api.dart';
+import '../../auth/auth_utils.dart';
 import '../../habits/habit_scope.dart';
 import '../../theme.dart';
+import '../../widgets/user_avatar.dart';
 import '../welcome_screen.dart';
 
 class ProfileScreen extends StatelessWidget {
@@ -11,11 +13,15 @@ class ProfileScreen extends StatelessWidget {
     required this.userName,
     required this.email,
     required this.onNameChanged,
+    required this.onChooseAvatar,
+    this.avatarId,
   });
 
   final String userName;
   final String email;
+  final String? avatarId;
   final ValueChanged<String> onNameChanged;
+  final Future<void> Function(String id) onChooseAvatar;
 
   @override
   Widget build(BuildContext context) {
@@ -37,8 +43,8 @@ class ProfileScreen extends StatelessWidget {
         }
       }
     }
-    final initials = _initials(userName);
     final since = _monthYear(now);
+    final currentAvatar = AvatarScope.of(context).id ?? avatarId;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -59,18 +65,7 @@ class ProfileScreen extends StatelessWidget {
         ),
         const SizedBox(height: 20),
         Center(
-          child: CircleAvatar(
-            radius: 36,
-            backgroundColor: AppColors.mint,
-            child: Text(
-              initials,
-              style: const TextStyle(
-                color: AppColors.primary,
-                fontWeight: FontWeight.w800,
-                fontSize: 22,
-              ),
-            ),
-          ),
+          child: UserAvatar(name: userName, avatarId: currentAvatar, radius: 36),
         ),
         const SizedBox(height: 12),
         Text(
@@ -113,8 +108,8 @@ class ProfileScreen extends StatelessWidget {
         const SizedBox(height: 18),
         _MenuTile(
           icon: Icons.person_outline_rounded,
-          label: 'Edit name',
-          detail: userName,
+          label: 'About Me',
+          // detail: ,
           onTap: () => _open(
             context,
             EditNameScreen(
@@ -127,11 +122,19 @@ class ProfileScreen extends StatelessWidget {
         _MenuTile(
           icon: Icons.settings_outlined,
           label: 'Settings',
-          onTap: () => _open(context, const SettingsScreen()),
+          onTap: () => _open(
+            context,
+            SettingsScreen(
+              onChooseAvatar: onChooseAvatar,
+              avatarId: avatarId,
+              userName: userName,
+              email: email,
+            ),
+          ),
         ),
         _MenuTile(
           icon: Icons.help_outline_rounded,
-          label: 'Help & support',
+          label: 'Help & Support',
           onTap: () => _open(
             context,
             const _InfoPage(
@@ -168,7 +171,9 @@ class EditNameScreen extends StatefulWidget {
 
 class _EditNameScreenState extends State<EditNameScreen> {
   late final TextEditingController _name = TextEditingController(text: widget.userName);
+  late String _savedName = widget.userName;
   final _auth = AuthApi();
+  bool _editing = false;
   bool _busy = false;
   String? _error;
 
@@ -192,7 +197,10 @@ class _EditNameScreenState extends State<EditNameScreen> {
       final user = await _auth.updateName(email: widget.email, name: name);
       if (!mounted) return;
       widget.onNameChanged(user.name);
-      Navigator.pop(context);
+      setState(() {
+        _savedName = user.name;
+        _editing = false;
+      });
     } on AuthApiException catch (error) {
       if (!mounted) return;
       setState(() => _error = error.message);
@@ -214,19 +222,33 @@ class _EditNameScreenState extends State<EditNameScreen> {
                 onPressed: () => Navigator.pop(context),
                 icon: const Icon(Icons.arrow_back_rounded),
               ),
-              Text('Edit name', style: Theme.of(context).textTheme.headlineSmall),
-              const SizedBox(height: 8),
-              Text(
-                widget.email,
-                style: const TextStyle(color: AppColors.muted),
-              ),
+              Text('About Me', style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 16),
-              const Text('Your name', style: TextStyle(fontWeight: FontWeight.w800)),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _name,
-                textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(hintText: 'Alex Morgan'),
+              _MenuTile(
+                icon: Icons.person_outline_rounded,
+                label: 'Name',
+                // detail: _savedName,
+                onTap: () {
+                  _name.text = _savedName;
+                  setState(() {
+                    _editing = true;
+                    _error = null;
+                  });
+                },
+              ),
+              if (_editing) ...[
+                TextField(
+                  controller: _name,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(hintText: 'Alex Morgan'),
+                ),
+                const SizedBox(height: 8),
+              ],
+              _MenuTile(
+                icon: Icons.mail_outline_rounded,
+                label: 'Email',
+                detail: widget.email,
               ),
               if (_error != null) ...[
                 const SizedBox(height: 10),
@@ -238,20 +260,94 @@ class _EditNameScreenState extends State<EditNameScreen> {
                   ),
                 ),
               ],
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton(
-                  onPressed: _busy ? null : _save,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+              if (_editing) ...[
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: FilledButton(
+                    onPressed: _busy ? null : _save,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                     ),
+                    child: Text(_busy ? 'Saving...' : 'Save name'),
                   ),
-                  child: Text(_busy ? 'Saving...' : 'Save name'),
                 ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AvatarPicker extends StatefulWidget {
+  const _AvatarPicker({required this.selectedId, required this.onChoose});
+
+  final String? selectedId;
+  final Future<void> Function(String id) onChoose;
+
+  @override
+  State<_AvatarPicker> createState() => _AvatarPickerState();
+}
+
+class _AvatarPickerState extends State<_AvatarPicker> {
+  late String? _selected = widget.selectedId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back_rounded),
+              ),
+              Text('Choose an avatar', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 16),
+              Center(child: UserAvatar(name: '', avatarId: _selected, radius: 42)),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  for (final choice in avatarChoices)
+                    GestureDetector(
+                      onTap: () {
+                        setState(() => _selected = choice.id);
+                        widget.onChoose(choice.id);
+                      },
+                      child: Column(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(3),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: _selected == choice.id
+                                    ? AppColors.primary
+                                    : Colors.transparent,
+                                width: 2,
+                              ),
+                            ),
+                            child: UserAvatar(name: choice.label, avatarId: choice.id, radius: 32),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            choice.label,
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
             ],
           ),
@@ -261,11 +357,157 @@ class _EditNameScreenState extends State<EditNameScreen> {
   }
 }
 
-class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key});
+class ResetPasswordScreen extends StatefulWidget {
+  const ResetPasswordScreen({super.key, required this.email});
+
+  final String email;
+
+  @override
+  State<ResetPasswordScreen> createState() => _ResetPasswordScreenState();
+}
+
+class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
+  final _current = TextEditingController();
+  final _next = TextEditingController();
+  final _confirm = TextEditingController();
+  final _auth = AuthApi();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _current.dispose();
+    _next.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final next = _next.text;
+    if (_current.text.isEmpty || next.isEmpty) {
+      setState(() => _error = 'Enter your current and new password.');
+      return;
+    }
+    if (next != _confirm.text) {
+      setState(() => _error = 'New passwords do not match.');
+      return;
+    }
+    if (!checkPassword(next).isStrong) {
+      setState(() => _error = 'Use 8+ characters with a number and a symbol.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await _auth.resetPassword(
+        email: widget.email,
+        currentPassword: _current.text,
+        newPassword: next,
+      );
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      Navigator.pop(context);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Password updated.')),
+      );
+    } on AuthApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back_rounded),
+              ),
+            ),
+            Text('Reset password', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 8),
+            Text(
+              widget.email,
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 16),
+            const Text('Current password', style: TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _current,
+              obscureText: true,
+              decoration: const InputDecoration(hintText: 'Current password'),
+            ),
+            const SizedBox(height: 16),
+            const Text('New password', style: TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _next,
+              obscureText: true,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(hintText: '8+ characters, a number, a symbol'),
+            ),
+            const SizedBox(height: 16),
+            const Text('Confirm new password', style: TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _confirm,
+              obscureText: true,
+              decoration: const InputDecoration(hintText: 'Repeat the new password'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                style: const TextStyle(color: AppColors.error, fontWeight: FontWeight.w700),
+              ),
+            ],
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 52,
+              child: FilledButton(
+                onPressed: _busy ? null : _save,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                child: Text(_busy ? 'Saving...' : 'Update password'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({
+    super.key,
+    required this.onChooseAvatar,
+    required this.userName,
+    required this.email,
+    this.avatarId,
+  });
+
+  final Future<void> Function(String id) onChooseAvatar;
+  final String userName;
+  final String email;
+  final String? avatarId;
+
+  @override
+  Widget build(BuildContext context) {
+    final currentAvatar = AvatarScope.of(context).id ?? avatarId;
     return Scaffold(
       body: SafeArea(
         child: ListView(
@@ -290,8 +532,24 @@ class SettingsScreen extends StatelessWidget {
             const SizedBox(height: 8),
             Text('Make it yours.', style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 18),
+            Center(child: UserAvatar(name: userName, avatarId: currentAvatar, radius: 36)),
+            const SizedBox(height: 16),
             const Text('Your preferences', style: TextStyle(fontWeight: FontWeight.w800)),
             const SizedBox(height: 8),
+            _MenuTile(
+              icon: Icons.account_circle_outlined,
+              label: 'Avatar',
+              detail: avatarById(currentAvatar)?.label ?? 'Choose a look',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => _AvatarPicker(
+                    selectedId: currentAvatar,
+                    onChoose: onChooseAvatar,
+                  ),
+                ),
+              ),
+            ),
             _MenuTile(
               icon: Icons.notifications_none_rounded,
               label: 'Reminders',
@@ -301,30 +559,27 @@ class SettingsScreen extends StatelessWidget {
                 MaterialPageRoute<void>(builder: (_) => const ReminderScreen()),
               ),
             ),
-            const _MenuTile(
-              icon: Icons.wb_sunny_outlined,
-              label: 'Appearance',
-              detail: 'Light',
-            ),
-            const _MenuTile(
-              icon: Icons.calendar_today_outlined,
-              label: 'Week starts on',
-              detail: 'Monday',
-            ),
+            // const _MenuTile(
+            //   icon: Icons.wb_sunny_outlined,
+            //   label: 'Appearance',
+            //   detail: 'Light',
+            // ),
+            // const _MenuTile(
+            //   icon: Icons.calendar_today_outlined,
+            //   label: 'Week starts on',
+            //   detail: 'Monday',
+            // ),
             const SizedBox(height: 16),
             const Text('Account & privacy', style: TextStyle(fontWeight: FontWeight.w800)),
             const SizedBox(height: 8),
             _MenuTile(
               icon: Icons.lock_outline_rounded,
-              label: 'Password & security',
+              label: 'Reset password',
+              detail: 'Use your current password',
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute<void>(
-                  builder: (_) => const _InfoPage(
-                    title: 'Password & security',
-                    body:
-                        'Your password is stored as a hash. This demo does not change it from the phone.',
-                  ),
+                  builder: (_) => ResetPasswordScreen(email: email),
                 ),
               ),
             ),
@@ -427,7 +682,7 @@ class _ReminderScreenState extends State<ReminderScreen> {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Daily check-in', style: TextStyle(fontWeight: FontWeight.w800)),
-              subtitle: const Text('A moment to reflect · 9:00 PM'),
+              subtitle: const Text('A moment to reflect · 9:00 AM'),
               value: _dailyCheckIn,
               activeThumbColor: AppColors.primary,
               onChanged: (value) => setState(() => _dailyCheckIn = value),
@@ -578,12 +833,6 @@ class _Stat extends StatelessWidget {
       ),
     );
   }
-}
-
-String _initials(String name) {
-  final parts = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty);
-  final letters = parts.map((part) => part[0]).take(2).join();
-  return letters.isEmpty ? 'H' : letters.toUpperCase();
 }
 
 String _monthYear(DateTime day) {

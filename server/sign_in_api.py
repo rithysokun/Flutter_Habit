@@ -124,6 +124,34 @@ def create_user(name, email, password):
     return {"name": name, "email": email}
 
 
+def reset_password(email, current_password, new_password):
+    with connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT TOP 1 password_hash
+                FROM dbo.users
+                WHERE LOWER(email) = LOWER(%s)
+                """,
+                (email,),
+            )
+            row = cursor.fetchone()
+            if row is None or not password_matches(row[0], current_password):
+                raise ValueError("Current password is incorrect.")
+            password_hash = bcrypt.hashpw(
+                new_password.encode("utf-8"), bcrypt.gensalt()
+            ).decode("utf-8")
+            cursor.execute(
+                """
+                UPDATE dbo.users
+                SET password_hash = %s, updated_at = SYSUTCDATETIME()
+                WHERE LOWER(email) = LOWER(%s)
+                """,
+                (password_hash, email),
+            )
+    return {"email": email}
+
+
 def update_name(email, name):
     with connect() as connection:
         with connection.cursor() as cursor:
@@ -184,6 +212,19 @@ def _parse_time(value):
     return datetime.time(int(hour), int(minute))
 
 
+def _ensure_habit_columns(cursor):
+    cursor.execute(
+        """
+        IF COL_LENGTH('dbo.habits', 'sort_order') IS NULL
+          ALTER TABLE dbo.habits ADD sort_order INT NOT NULL
+            CONSTRAINT DF_habits_sort_order DEFAULT 0
+        IF COL_LENGTH('dbo.habits', 'archived') IS NULL
+          ALTER TABLE dbo.habits ADD archived BIT NOT NULL
+            CONSTRAINT DF_habits_archived DEFAULT 0
+        """
+    )
+
+
 def _habit_json(row, logs):
     return {
         "id": str(row[0]),
@@ -194,6 +235,8 @@ def _habit_json(row, logs):
         "weekdays": [_as_bool(row[index]) for index in range(5, 12)],
         "reminderEnabled": _as_bool(row[12]),
         "reminderTime": _time_text(row[13]),
+        "sortOrder": int(row[14] or 0),
+        "archived": _as_bool(row[15]),
         "logs": logs,
     }
 
@@ -202,15 +245,16 @@ def list_habits(email):
     owner = user_id_for(email)
     with connect() as connection:
         with connection.cursor() as cursor:
+            _ensure_habit_columns(cursor)
             cursor.execute(
                 """
                 SELECT id, name, description, daily_goal, goal_unit,
                   repeat_monday, repeat_tuesday, repeat_wednesday, repeat_thursday,
                   repeat_friday, repeat_saturday, repeat_sunday,
-                  reminder_enabled, reminder_time
+                  reminder_enabled, reminder_time, sort_order, archived
                 FROM dbo.habits
                 WHERE user_id = %s
-                ORDER BY created_at
+                ORDER BY sort_order, created_at
                 """,
                 (owner,),
             )
@@ -261,20 +305,31 @@ def save_habit(email, data, habit_id=None):
 
     with connect() as connection:
         with connection.cursor() as cursor:
+            _ensure_habit_columns(cursor)
             if habit_id is None:
                 habit_id = str(uuid.uuid4())
+                cursor.execute(
+                    """
+                    SELECT ISNULL(MAX(sort_order), 0) + 1
+                    FROM dbo.habits
+                    WHERE user_id = %s
+                    """,
+                    (owner,),
+                )
+                sort_order = int(cursor.fetchone()[0])
                 cursor.execute(
                     """
                     INSERT INTO dbo.habits (
                       id, user_id, name, description, daily_goal, goal_unit,
                       repeat_monday, repeat_tuesday, repeat_wednesday, repeat_thursday,
                       repeat_friday, repeat_saturday, repeat_sunday,
-                      reminder_enabled, reminder_time, created_at, updated_at
+                      reminder_enabled, reminder_time, sort_order, archived,
+                      created_at, updated_at
                     )
                     VALUES (
                       %s, %s, %s, %s, %s, %s,
                       %s, %s, %s, %s, %s, %s, %s,
-                      %s, %s, SYSUTCDATETIME(), SYSUTCDATETIME()
+                      %s, %s, %s, 0, SYSUTCDATETIME(), SYSUTCDATETIME()
                     )
                     """,
                     (
@@ -287,6 +342,7 @@ def save_habit(email, data, habit_id=None):
                         *weekdays,
                         reminder_enabled,
                         reminder_time,
+                        sort_order,
                     ),
                 )
             else:
@@ -320,6 +376,40 @@ def save_habit(email, data, habit_id=None):
         if habit["id"].lower() == habit_id.lower():
             return habit
     raise ValueError("That habit was not found.")
+
+
+def reorder_habits(email, ids):
+    owner = user_id_for(email)
+    ordered = [str(habit_id) for habit_id in ids]
+    with connect() as connection:
+        with connection.cursor() as cursor:
+            _ensure_habit_columns(cursor)
+            for index, habit_id in enumerate(ordered):
+                cursor.execute(
+                    """
+                    UPDATE dbo.habits
+                    SET sort_order = %s, updated_at = SYSUTCDATETIME()
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (index, habit_id, owner),
+                )
+
+
+def set_archived(email, habit_id, archived):
+    owner = user_id_for(email)
+    with connect() as connection:
+        with connection.cursor() as cursor:
+            _ensure_habit_columns(cursor)
+            cursor.execute(
+                """
+                UPDATE dbo.habits
+                SET archived = %s, updated_at = SYSUTCDATETIME()
+                WHERE id = %s AND user_id = %s
+                """,
+                (1 if archived else 0, habit_id, owner),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("That habit was not found.")
 
 
 def delete_habit(email, habit_id):
@@ -408,6 +498,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/update-name":
             self._update_name(data)
             return
+        if self.path == "/reset-password":
+            self._reset_password(data)
+            return
         if self.path == "/habits/list":
             self._habits_list(data)
             return
@@ -416,6 +509,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/habits/delete":
             self._habits_delete(data)
+            return
+        if self.path == "/habits/reorder":
+            self._habits_reorder(data)
+            return
+        if self.path == "/habits/archive":
+            self._habits_archive(data)
             return
         if self.path == "/habits/log":
             self._habits_log(data)
@@ -474,6 +573,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(200, user)
 
+    def _reset_password(self, data):
+        email = str(data.get("email", "")).strip()
+        current_password = str(data.get("currentPassword", ""))
+        new_password = str(data.get("newPassword", ""))
+        if not email or not current_password or not new_password:
+            self._send(400, {"message": "Enter your current and new password."})
+            return
+        try:
+            self._send(200, reset_password(email, current_password, new_password))
+        except ValueError as error:
+            self._send(401, {"message": str(error)})
+        except Exception as error:
+            self._send(503, {"message": str(error)})
+
     def _email(self, data):
         return str(data.get("email", "")).strip()
 
@@ -510,6 +623,38 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             delete_habit(email, habit_id)
+        except ValueError as error:
+            self._send(404, {"message": str(error)})
+            return
+        except Exception as error:
+            self._send(503, {"message": str(error)})
+            return
+        self._send(200, {"ok": True})
+
+    def _habits_reorder(self, data):
+        email = self._email(data)
+        ids = data.get("ids")
+        if not email or not isinstance(ids, list):
+            self._send(400, {"message": "That order could not be saved."})
+            return
+        try:
+            reorder_habits(email, ids)
+        except ValueError as error:
+            self._send(404, {"message": str(error)})
+            return
+        except Exception as error:
+            self._send(503, {"message": str(error)})
+            return
+        self._send(200, {"ok": True})
+
+    def _habits_archive(self, data):
+        email = self._email(data)
+        habit_id = str(data.get("id", "")).strip()
+        if not email or not habit_id:
+            self._send(400, {"message": "That habit could not be archived."})
+            return
+        try:
+            set_archived(email, habit_id, bool(data.get("archived")))
         except ValueError as error:
             self._send(404, {"message": str(error)})
             return

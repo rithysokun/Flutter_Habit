@@ -4,6 +4,7 @@ import '../../auth/auth_api.dart';
 import '../../habits/habit.dart';
 import '../../habits/habit_scope.dart';
 import '../../theme.dart';
+import '../../widgets/user_avatar.dart';
 import 'habit_completed_screen.dart';
 import 'habit_details_screen.dart';
 import 'habit_form_screen.dart';
@@ -34,20 +35,54 @@ const _weekdays = [
 ];
 
 class TodayScreen extends StatelessWidget {
-  const TodayScreen({super.key, required this.userName});
+  const TodayScreen({
+    super.key,
+    required this.userName,
+    required this.onOpenProfile,
+    this.avatarId,
+  });
 
   final String userName;
+  final String? avatarId;
+  final VoidCallback onOpenProfile;
 
   @override
   Widget build(BuildContext context) {
     final store = HabitScope.of(context);
     final day = store.selectedDay;
     final habits = store.habitsFor(day);
+    final archived = store.archivedHabits;
     final done = store.completedCount(day);
+    final waiting = habits.where((habit) => !habit.completeOn(day)).length;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
       children: [
+        Row(
+          children: [
+            GestureDetector(
+              onTap: onOpenProfile,
+              child: UserAvatar(name: userName, avatarId: avatarId),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Hello $userName,',
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+            ),
+            _BellButton(
+              count: waiting,
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => _NotificationsScreen(day: day),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
         Text(
           '${_weekdays[day.weekday - 1]}, ${_months[day.month - 1]} ${day.day}',
           style: const TextStyle(
@@ -80,35 +115,147 @@ class TodayScreen extends StatelessWidget {
           onSelect: store.selectDay,
         ),
         const SizedBox(height: 16),
-        if (habits.isEmpty)
+        if (habits.isEmpty && archived.isEmpty)
           const _EmptyToday()
         else ...[
-          _ProgressCard(done: done, total: habits.length),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              const Text(
-                'Your habits',
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
-              ),
-              const Spacer(),
-              Text(
-                done == 0 ? 'Start your streak' : '$done-day streak',
-                style: const TextStyle(
-                  color: AppColors.muted,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
+          if (habits.isEmpty)
+            const _EmptyToday(paused: true)
+          else ...[
+            _ProgressCard(done: done, total: habits.length),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                const Text(
+                  'Your habits',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          for (final habit in habits) ...[
-            _HabitTile(habit: habit),
+                const Spacer(),
+                Text(
+                  done == 0 ? 'Start your streak' : '$done-day streak',
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 10),
+            ReorderableListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              itemCount: habits.length,
+              onReorderItem: (oldIndex, newIndex) async {
+                try {
+                  await store.reorderVisible(habits, oldIndex, newIndex);
+                } on AuthApiException catch (error) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(error.message)),
+                  );
+                }
+              },
+              itemBuilder: (context, index) {
+                final habit = habits[index];
+                return Padding(
+                  key: ValueKey(habit.id),
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _HabitTile(habit: habit, index: index),
+                );
+              },
+            ),
+          ],
+          if (archived.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _ArchivedSection(habits: archived),
           ],
         ],
       ],
+    );
+  }
+}
+
+class _BellButton extends StatelessWidget {
+  const _BellButton({required this.count, required this.onPressed});
+
+  final int count;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: onPressed,
+      icon: Badge(
+        isLabelVisible: count > 0,
+        label: Text('$count'),
+        backgroundColor: AppColors.error,
+        child: const Icon(Icons.notifications_none_rounded),
+      ),
+    );
+  }
+}
+
+class _NotificationsScreen extends StatelessWidget {
+  const _NotificationsScreen({required this.day});
+
+  final DateTime day;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = HabitScope.of(context);
+    final waiting = store.habitsFor(day).where((habit) => !habit.completeOn(day)).toList()
+      ..sort((a, b) {
+        final aTime = a.reminderEnabled ? a.reminderTime : null;
+        final bTime = b.reminderEnabled ? b.reminderTime : null;
+        if (aTime == null && bTime == null) return 0;
+        if (aTime == null) return 1;
+        if (bTime == null) return -1;
+        final aMinutes = aTime.hour * 60 + aTime.minute;
+        final bMinutes = bTime.hour * 60 + bTime.minute;
+        return bMinutes.compareTo(aMinutes);
+      });
+
+    return Scaffold(
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back_rounded),
+              ),
+            ),
+            Text('Notifications', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 12),
+            if (waiting.isEmpty)
+              const Text(
+                'You are caught up. Every habit for this day is complete.',
+                style: TextStyle(color: AppColors.muted, height: 1.4),
+              )
+            else
+              for (final habit in waiting)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: ListTile(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: const BorderSide(color: AppColors.border),
+                    ),
+                    leading: Icon(habit.icon, color: AppColors.primary),
+                    title: Text(habit.name, style: const TextStyle(fontWeight: FontWeight.w800)),
+                    subtitle: Text(
+                      habit.reminderEnabled && habit.reminderTime != null
+                          ? '${habit.dailyGoal} ${habit.unit} · ${formatReminder(habit.reminderTime!)}'
+                          : '${habit.dailyGoal} ${habit.unit} still open today',
+                    ),
+                  ),
+                ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -151,8 +298,7 @@ class _WeekStrip extends StatelessWidget {
         for (var i = 0; i < 7; i++)
           _DayChip(
             day: start.add(Duration(days: i)),
-            selected: start.add(Duration(days: i)).day == selected.day &&
-                start.add(Duration(days: i)).month == selected.month,
+            selected: _sameDay(start.add(Duration(days: i)), selected),
             onTap: () => onSelect(start.add(Duration(days: i))),
           ),
       ],
@@ -173,14 +319,21 @@ class _DayChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final today = _sameDay(day, DateTime.now());
+    final marked = today && !selected;
     return GestureDetector(
       onTap: onTap,
       child: Container(
         width: 40,
         padding: const EdgeInsets.symmetric(vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? AppColors.primary : Colors.transparent,
+          color: selected
+              ? AppColors.primary
+              : marked
+                  ? AppColors.mint
+                  : Colors.transparent,
           borderRadius: BorderRadius.circular(14),
+          border: marked ? Border.all(color: AppColors.primary, width: 1.5) : null,
         ),
         child: Column(
           children: [
@@ -189,7 +342,11 @@ class _DayChip extends StatelessWidget {
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
-                color: selected ? Colors.white70 : AppColors.muted,
+                color: selected
+                    ? Colors.white70
+                    : marked
+                        ? AppColors.primary
+                        : AppColors.muted,
               ),
             ),
             const SizedBox(height: 4),
@@ -197,7 +354,11 @@ class _DayChip extends StatelessWidget {
               '${day.day}',
               style: TextStyle(
                 fontWeight: FontWeight.w800,
-                color: selected ? Colors.white : AppColors.text,
+                color: selected
+                    ? Colors.white
+                    : marked
+                        ? AppColors.primary
+                        : AppColors.text,
               ),
             ),
           ],
@@ -205,6 +366,10 @@ class _DayChip extends StatelessWidget {
       ),
     );
   }
+}
+
+bool _sameDay(DateTime a, DateTime b) {
+  return a.year == b.year && a.month == b.month && a.day == b.day;
 }
 
 class _ProgressCard extends StatelessWidget {
@@ -260,9 +425,10 @@ class _ProgressCard extends StatelessWidget {
 }
 
 class _HabitTile extends StatefulWidget {
-  const _HabitTile({required this.habit});
+  const _HabitTile({required this.habit, required this.index});
 
   final Habit habit;
+  final int index;
 
   @override
   State<_HabitTile> createState() => _HabitTileState();
@@ -283,14 +449,46 @@ class _HabitTileState extends State<_HabitTile> {
           child: GestureDetector(
             onHorizontalDragUpdate: (details) {
               setState(() {
-                _offset = (_offset + details.delta.dx).clamp(-reveal, 0);
+                _offset = (_offset + details.delta.dx).clamp(-reveal, reveal);
               });
             },
             onHorizontalDragEnd: (_) {
-              setState(() => _offset = _offset.abs() > reveal / 2 ? -reveal : 0);
+              setState(() {
+                if (_offset > reveal / 2) {
+                  _offset = reveal;
+                } else if (_offset < -reveal / 2) {
+                  _offset = -reveal;
+                } else {
+                  _offset = 0;
+                }
+              });
             },
             child: Stack(
               children: [
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  bottom: 0,
+                  width: reveal,
+                  child: Material(
+                    color: AppColors.primary,
+                    child: InkWell(
+                      onTap: () async {
+                        try {
+                          await store.setArchived(habit.id, true);
+                        } on AuthApiException catch (error) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(error.message)),
+                          );
+                        }
+                      },
+                      child: const Center(
+                        child: Icon(Icons.archive_outlined, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
                 Positioned(
                   top: 0,
                   right: 0,
@@ -299,28 +497,45 @@ class _HabitTileState extends State<_HabitTile> {
                   child: Material(
                     color: AppColors.error,
                     child: InkWell(
-                          onTap: () async {
-                            try {
-                              await store.remove(habit.id);
-                            } on AuthApiException catch (error) {
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(error.message)),
-                              );
-                            }
-                          },
+                      onTap: () async {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Delete habit'),
+                            content: const Text('Do you want to delete this habit?'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, false),
+                                child: const Text('No'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, true),
+                                child: const Text('Yes'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed != true || !context.mounted) return;
+                        try {
+                          await store.remove(habit.id);
+                        } on AuthApiException catch (error) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(error.message)),
+                          );
+                        }
+                      },
                       child: const Center(
-                        child: Icon(
-                          Icons.delete_outline_rounded,
-                          color: Colors.white,
-                        ),
+                        child: Icon(Icons.delete_outline_rounded, color: Colors.white),
                       ),
                     ),
                   ),
                 ),
                 Transform.translate(
                   offset: Offset(_offset, 0),
-                  child: Material(
+                  child: ReorderableDelayedDragStartListener(
+                    index: widget.index,
+                    child: Material(
       color: AppColors.surface,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
@@ -410,6 +625,7 @@ class _HabitTileState extends State<_HabitTile> {
         ),
       ),
     ),
+                  ),
                 ),
               ],
             ),
@@ -420,8 +636,124 @@ class _HabitTileState extends State<_HabitTile> {
   }
 }
 
+class _ArchivedSection extends StatefulWidget {
+  const _ArchivedSection({required this.habits});
+
+  final List<Habit> habits;
+
+  @override
+  State<_ArchivedSection> createState() => _ArchivedSectionState();
+}
+
+class _ArchivedSectionState extends State<_ArchivedSection> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Material(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(18),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(18),
+            onTap: () => setState(() => _open = !_open),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.archive_outlined, color: AppColors.muted),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Archived',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  Text(
+                    '${widget.habits.length}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    _open ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                    color: AppColors.muted,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (_open) ...[
+          const SizedBox(height: 10),
+          for (final habit in widget.habits) ...[
+            _ArchivedTile(habit: habit),
+            const SizedBox(height: 10),
+          ],
+        ],
+      ],
+    );
+  }
+}
+
+class _ArchivedTile extends StatelessWidget {
+  const _ArchivedTile({required this.habit});
+
+  final Habit habit;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = HabitScope.of(context);
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(
+          children: [
+            Icon(habit.icon, color: AppColors.muted),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                habit.name,
+                style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.muted),
+              ),
+            ),
+            TextButton(
+              onPressed: () async {
+                try {
+                  await store.setArchived(habit.id, false);
+                } on AuthApiException catch (error) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(error.message)),
+                  );
+                }
+              },
+              child: const Text('Restore'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _EmptyToday extends StatelessWidget {
-  const _EmptyToday();
+  const _EmptyToday({this.paused = false});
+
+  final bool paused;
 
   @override
   Widget build(BuildContext context) {
@@ -439,15 +771,17 @@ class _EmptyToday extends StatelessWidget {
         ),
         const SizedBox(height: 18),
         Text(
-          'Every routine starts small.',
+          paused ? 'Today is clear.' : 'Every routine starts small.',
           style: Theme.of(context).textTheme.titleLarge,
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 8),
-        const Text(
-          'No habits yet. Choose one simple thing you’d like to make time for.',
+        Text(
+          paused
+              ? 'Active habits for this day are archived. Restore one below, or add a new habit.'
+              : 'No habits yet. Choose one simple thing you’d like to make time for.',
           textAlign: TextAlign.center,
-          style: TextStyle(color: AppColors.muted, height: 1.4),
+          style: const TextStyle(color: AppColors.muted, height: 1.4),
         ),
         const SizedBox(height: 18),
         SizedBox(

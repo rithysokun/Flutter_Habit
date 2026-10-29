@@ -129,6 +129,31 @@ class HabitDetailsScreen extends StatelessWidget {
                     ),
                 ],
               ),
+              if (habit.unit.toLowerCase() == 'minutes') ...[
+                const SizedBox(height: 20),
+                _GoalTimer(
+                  minutes: habit.dailyGoal,
+                  alreadyDone: habit.completeOn(day),
+                  onFinished: () async {
+                    try {
+                      await store.setAmount(habit.id, habit.dailyGoal);
+                    } on AuthApiException catch (error) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(error.message)),
+                      );
+                      return;
+                    }
+                    if (!context.mounted) return;
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => HabitCompletedScreen(habitId: habit.id),
+                      ),
+                    );
+                  },
+                ),
+              ],
               if (habit.reminderEnabled && habit.reminderTime != null) ...[
                 const SizedBox(height: 16),
                 ListTile(
@@ -180,6 +205,148 @@ class HabitDetailsScreen extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _GoalTimer extends StatefulWidget {
+  const _GoalTimer({
+    required this.minutes,
+    required this.alreadyDone,
+    required this.onFinished,
+  });
+
+  final int minutes;
+  final bool alreadyDone;
+  final Future<void> Function() onFinished;
+
+  @override
+  State<_GoalTimer> createState() => _GoalTimerState();
+}
+
+class _GoalTimerState extends State<_GoalTimer> {
+  late int _remaining = widget.minutes * 60;
+  bool _running = false;
+  bool _saving = false;
+
+  @override
+  void didUpdateWidget(_GoalTimer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.alreadyDone && _running) {
+      _running = false;
+      _remaining = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _running = false;
+    super.dispose();
+  }
+
+  void _tick() {
+    Future<void>.delayed(const Duration(seconds: 1), () async {
+      if (!mounted || !_running) return;
+      if (_remaining <= 1) {
+        setState(() {
+          _remaining = 0;
+          _running = false;
+          _saving = true;
+        });
+        await widget.onFinished();
+        if (mounted) setState(() => _saving = false);
+        return;
+      }
+      setState(() => _remaining -= 1);
+      _tick();
+    });
+  }
+
+  String get _label {
+    final minutes = (_remaining ~/ 60).toString().padLeft(2, '0');
+    final seconds = (_remaining % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  void _cancel() {
+    setState(() {
+      _running = false;
+      _remaining = widget.minutes * 60;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.minutes * 60;
+    final progress = total == 0 ? 1.0 : (1 - _remaining / total).clamp(0.0, 1.0);
+    final showDone = widget.alreadyDone || _remaining == 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SizedBox(
+          width: 220,
+          height: 220,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              SizedBox(
+                width: 220,
+                height: 220,
+                child: CircularProgressIndicator(
+                  value: showDone && widget.alreadyDone ? 1 : progress,
+                  strokeWidth: 12,
+                  backgroundColor: const Color(0xFFE5E7EB),
+                  color: AppColors.primary,
+                  strokeCap: StrokeCap.round,
+                ),
+              ),
+              Text(
+                showDone && widget.alreadyDone ? '00:00' : _label,
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: showDone || _saving ? null : _cancel,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.text,
+                  side: const BorderSide(color: AppColors.border),
+                  minimumSize: const Size.fromHeight(48),
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(24)),
+                  ),
+                ),
+                child: const Text('Cancel'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: FilledButton(
+                onPressed: showDone || _saving
+                    ? null
+                    : () {
+                        setState(() => _running = !_running);
+                        if (_running) _tick();
+                      },
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  disabledBackgroundColor: AppColors.disabled,
+                  minimumSize: const Size.fromHeight(48),
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(24)),
+                  ),
+                ),
+                child: Text(_saving ? 'Saving...' : _running ? 'Pause' : 'Start'),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

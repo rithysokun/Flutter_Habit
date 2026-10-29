@@ -52,7 +52,11 @@ class HabitScopeState extends State<HabitScope> {
   }
 
   List<Habit> habitsFor(DateTime day) {
-    return habits.where((habit) => habit.scheduledOn(day)).toList();
+    return habits.where((habit) => !habit.archived && habit.scheduledOn(day)).toList();
+  }
+
+  List<Habit> get archivedHabits {
+    return habits.where((habit) => habit.archived).toList();
   }
 
   int completedCount(DateTime day) {
@@ -72,6 +76,39 @@ class HabitScopeState extends State<HabitScope> {
       final index = habits.indexWhere((item) => item.id == habit.id);
       if (index >= 0) habits[index] = saved;
     });
+  }
+
+  Future<void> reorderVisible(List<Habit> visible, int oldIndex, int newIndex) async {
+    if (oldIndex < 0 || oldIndex >= visible.length) return;
+    if (newIndex < 0 || newIndex >= visible.length || newIndex == oldIndex) return;
+    final visibleIds = visible.map((habit) => habit.id).toSet();
+    final order = visible.map((habit) => habit.id).toList();
+    final moved = order.removeAt(oldIndex);
+    order.insert(newIndex, moved);
+    final byId = {for (final habit in habits) habit.id: habit};
+    final next = <Habit>[
+      for (final habit in habits)
+        if (visibleIds.contains(habit.id)) byId[order.removeAt(0)]! else habit,
+    ];
+    setState(() {
+      habits
+        ..clear()
+        ..addAll(next);
+    });
+    try {
+      await _api.reorder(widget.email, habits.map((habit) => habit.id).toList());
+    } on AuthApiException {
+      if (!mounted) return;
+      await reload();
+      rethrow;
+    }
+  }
+
+  Future<void> setArchived(String id, bool archived) async {
+    final habit = habits.firstWhere((item) => item.id == id);
+    await _api.archive(widget.email, id, archived);
+    if (!mounted) return;
+    setState(() => habit.archived = archived);
   }
 
   Future<void> remove(String id) async {

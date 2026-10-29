@@ -43,6 +43,18 @@ class HabitApi {
     return _post('/habits/delete', {'email': email, 'id': id});
   }
 
+  Future<void> reorder(String email, List<String> ids) {
+    return _post('/habits/reorder', {'email': email, 'ids': ids});
+  }
+
+  Future<void> archive(String email, String id, bool archived) {
+    return _post('/habits/archive', {
+      'email': email,
+      'id': id,
+      'archived': archived,
+    });
+  }
+
   Future<void> log({
     required String email,
     required String habitId,
@@ -103,6 +115,10 @@ class HabitApi {
       reminderEnabled: json['reminderEnabled'] == true,
       reminderTime: time,
       icon: iconForUnit(json['unit']?.toString() ?? ''),
+      archived: json['archived'] == true,
+      sortOrder: json['sortOrder'] is int
+          ? json['sortOrder'] as int
+          : int.tryParse('${json['sortOrder']}') ?? 0,
     );
     final logs = json['logs'];
     if (logs is List) {

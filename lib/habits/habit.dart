@@ -11,6 +11,8 @@ class Habit {
     required this.reminderEnabled,
     this.reminderTime,
     this.icon = Icons.menu_book_rounded,
+    this.archived = false,
+    this.sortOrder = 0,
   });
 
   final String id;
@@ -22,6 +24,8 @@ class Habit {
   bool reminderEnabled;
   TimeOfDay? reminderTime;
   IconData icon;
+  bool archived;
+  int sortOrder;
   final Map<String, int> amounts = {};
   final Map<String, TimeOfDay> finishedAt = {};
 
@@ -61,6 +65,8 @@ class Habit {
       reminderEnabled: reminderEnabled,
       reminderTime: reminderTime,
       icon: icon,
+      archived: archived,
+      sortOrder: sortOrder,
     );
   }
 }

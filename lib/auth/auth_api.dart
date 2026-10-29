@@ -66,6 +66,24 @@ class AuthApi {
     );
   }
 
+  Future<void> resetPassword({
+    required String email,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await _post(
+      '/reset-password',
+      {
+        'email': email.trim(),
+        'currentPassword': currentPassword,
+        'newPassword': newPassword,
+      },
+      okStatus: 200,
+      fallbackEmail: email.trim(),
+      fallbackMessage: 'Could not reset your password.',
+    );
+  }
+
   Future<SignedInUser> _post(
     String path,
     Map<String, String> body, {

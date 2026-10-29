@@ -92,6 +92,22 @@ class _CalendarScreenState extends State<CalendarScreen> {
               }),
               icon: const Icon(Icons.chevron_right_rounded),
             ),
+            if (_month.year != today.year || _month.month != today.month)
+              TextButton(
+                onPressed: () => setState(() {
+                  _month = DateTime(today.year, today.month);
+                }),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'Today',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
           ],
         ),
         Row(
@@ -121,7 +137,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
           children: [
             _LegendDot(color: AppColors.primary, label: 'All done'),
             SizedBox(width: 12),
-            _LegendDot(color: AppColors.mintDeep, label: 'Partial'),
+            _LegendDot(color: AppColors.mint, label: 'Partial'),
             SizedBox(width: 12),
             _LegendDot(color: Color(0xFFE5E7EB), label: 'Upcoming'),
           ],
@@ -224,7 +240,7 @@ class _MonthGrid extends StatelessWidget {
       fill = AppColors.primary;
       text = Colors.white;
     } else if (done > 0) {
-      fill = AppColors.mintDeep;
+      fill = AppColors.mint;
     }
     final isToday = day == today;
     return GestureDetector(
